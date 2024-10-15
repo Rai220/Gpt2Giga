@@ -17,13 +17,13 @@ from dotenv import find_dotenv, load_dotenv
 env_path = find_dotenv(".env")
 load_dotenv(env_path)
 
-giga = GigaChat(model="GigaChat-Pro", verify_ssl_certs=False)
+giga = GigaChat(model="GigaChat-Pro", verify_ssl_certs=False, profanity_check=False)
 
 
 def send_to_gigachat(data: dict) -> ChatCompletion:
     try:
         gpt_model = data.pop("model", None)
-        if 'functions' not in data:
+        if 'functions' not in data and 'tools' in data:
             data['functions'] = []
             for tool in data.get('tools', []):
                 if tool['type'] == 'function':
@@ -92,18 +92,22 @@ class ProxyHandler(http.server.SimpleHTTPRequestHandler):
             json_body = json.loads(request_body_text)
 
             if self.server.verbose:
-                logging.info(f"Request Body: {request_body_text}")
+                logging.info(f"Request Body:")
+                logging.info(json_body)
 
             giga_resp = send_to_gigachat(json_body)
 
             try:
                 self.send_response(200)
+                self.send_header("Content-Type", "application/json")
+                resp = json.dumps(giga_resp, ensure_ascii=False).encode("utf-8")
+                
+                if self.server.verbose:
+                    logging.info(f"Request Body: {resp}")
+                
+                self.send_header("Content-Length", str(len(resp)))
                 self.end_headers()
-
-                self.wfile.write(
-                    json.dumps(giga_resp, ensure_ascii=False).encode("utf-8")
-                )
-
+                self.wfile.write(resp)
             except urllib.error.HTTPError as e:
                 self.send_response(e.code)
                 self.send_header("Content-Type", "text/html")
