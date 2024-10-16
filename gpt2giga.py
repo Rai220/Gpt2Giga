@@ -16,7 +16,7 @@ from gigachat.models import Chat, ChatCompletion
 env_path = find_dotenv(".env")
 load_dotenv(env_path)
 
-giga = GigaChat(model="GigaChat-Max", verify_ssl_certs=False, profanity_check=False)
+giga = GigaChat(verify_ssl_certs=False, profanity_check=False)
 
 
 def send_to_gigachat(data: dict) -> ChatCompletion:
@@ -214,7 +214,7 @@ if __name__ == "__main__":
     parser.add_argument(
         "--verbose",
         type=bool,
-        default=os.getenv("GPT2GIGA_VERBOSE", True),
+        default=os.getenv("GPT2GIGA_VERBOSE", "False") != "False",
         help="Включает вывод запросов и ответов",
     )
 
