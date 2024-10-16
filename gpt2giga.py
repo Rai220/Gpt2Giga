@@ -6,7 +6,8 @@ import argparse
 import os
 import logging
 import json
-
+import uuid
+import time
 
 from gigachat import GigaChat
 from gigachat.models import Chat, ChatCompletion
@@ -17,34 +18,53 @@ from dotenv import find_dotenv, load_dotenv
 env_path = find_dotenv(".env")
 load_dotenv(env_path)
 
-giga = GigaChat(model="GigaChat-Pro", verify_ssl_certs=False, profanity_check=False)
+giga = GigaChat(model="GigaChat-Max", verify_ssl_certs=False, profanity_check=False)
 
 
 def send_to_gigachat(data: dict) -> ChatCompletion:
     try:
         gpt_model = data.pop("model", None)
-        if 'functions' not in data and 'tools' in data:
-            data['functions'] = []
-            for tool in data.get('tools', []):
-                if tool['type'] == 'function':
-                    data['functions'].append(tool['function'])
-        for message in data['messages']:
-            if message['role'] == 'tool':
-                message['role'] = 'function'
-                message['content'] = json.dumps(message.get('content', ""), ensure_ascii=False)
-            message['function_call_id'] = message.get('tool_call_id', None)
-            if message['content'] == None:
-                message['content'] = ''
+        temperature = data.get("temperature", 1e-15)
+        if temperature == 0:
+            temperature = 1e-15
+        data["temperature"] = temperature
+        if "functions" not in data and data.get("tools", None):
+            data["functions"] = []
+            for tool in data.get("tools", []):
+                if tool["type"] == "function":
+                    data["functions"].append(tool["function"])
+        for message in data["messages"]:
+            if message["role"] == "tool":
+                message["role"] = "function"
+                message["content"] = json.dumps(
+                    message.get("content", ""), ensure_ascii=False
+                )
+            if message["content"] == None:
+                message["content"] = ""
 
         chat = Chat.parse_obj(data)
 
         giga_resp = giga.chat(chat)
         giga_dict = json.loads(giga_resp.json())
-        
+
+        # Remove all none from giga_dict in all levels
+        def remove_none(d):
+            if isinstance(d, dict):
+                return {k: remove_none(v) for k, v in d.items() if v is not None}
+            elif isinstance(d, list):
+                return [remove_none(v) for v in d if v is not None]
+            else:
+                return d
+
+        giga_dict = remove_none(giga_dict)
+
         for choise in giga_dict["choices"]:
             if choise["message"]["role"] == "assistant":
-                if choise["message"].get('function_call', None):
-                    arg_txt = json.dumps(choise["message"]["function_call"]["arguments"], ensure_ascii=True)
+                if choise["message"].get("function_call", None):
+                    arg_txt = json.dumps(
+                        choise["message"]["function_call"]["arguments"],
+                        ensure_ascii=True,
+                    )
                     choise["message"]["tool_calls"] = [
                         {
                             "id": choise["message"]["functions_state_id"],
@@ -55,17 +75,17 @@ def send_to_gigachat(data: dict) -> ChatCompletion:
                             },
                         }
                     ]
-        
+
         result = {
-            "id": "chatcmpl-AIZ9eSj8SVnkS0IhxdtTmot5z5NaX",
+            "id": "chatcmpl-" + str(uuid.uuid4()),
             "object": "chat.completion",
-            "created": 1728988402,
+            "created": int(time.time() * 1000),
             "model": gpt_model,
             "choices": giga_dict["choices"],
             "usage": {
-                "prompt_tokens": 1,
-                "completion_tokens": 1,
-                "total_tokens": 1,
+                "prompt_tokens": 10,
+                "completion_tokens": 10,
+                "total_tokens": 20,
                 "prompt_tokens_details": {"cached_tokens": 0},
                 "completion_tokens_details": {"reasoning_tokens": 0},
             },
@@ -76,12 +96,21 @@ def send_to_gigachat(data: dict) -> ChatCompletion:
         logging.error(f"Error processing the request: {e}", exc_info=True)
         return None
 
+
 class ProxyHandler(http.server.SimpleHTTPRequestHandler):
     def do_GET(self):
         self.handle_proxy_request()
 
     def do_POST(self):
         self.handle_proxy_request()
+
+    def do_OPTIONS(self):
+        self.send_response(200)
+        self.send_header("Allow", "GET, POST, OPTIONS")
+        self.send_header("Access-Control-Allow-Origin", "*")
+        self.send_header("Access-Control-Allow-Methods", "GET, POST, OPTIONS")
+        self.send_header("Access-Control-Allow-Headers", "Content-Type, Authorization")
+        self.end_headers()
 
     def handle_proxy_request(self):
         try:
@@ -90,6 +119,7 @@ class ProxyHandler(http.server.SimpleHTTPRequestHandler):
             request_body = self.rfile.read(content_length) if content_length else None
             request_body_text = request_body.decode("utf-8", errors="replace")
             json_body = json.loads(request_body_text)
+            stream = json_body.pop("stream", False)
 
             if self.server.verbose:
                 logging.info(f"Request Body:")
@@ -98,14 +128,29 @@ class ProxyHandler(http.server.SimpleHTTPRequestHandler):
             giga_resp = send_to_gigachat(json_body)
 
             try:
-                self.send_response(200)
-                self.send_header("Content-Type", "application/json")
                 resp = json.dumps(giga_resp, ensure_ascii=False).encode("utf-8")
-                
+
                 if self.server.verbose:
-                    logging.info(f"Request Body: {resp}")
-                
+                    print("\nResponse:")
+                    print(resp)
+
+                self.send_response(200)
                 self.send_header("Content-Length", str(len(resp)))
+                self.send_header("X-Request-ID", str(uuid.uuid4()))
+                self.send_header("Access-Control-Expose-Headers", "X-Request-ID")
+                self.send_header("OpenAI-Organization", "user-s99cjsitxzpppdim4tm9oe16")
+                self.send_header("OpenAI-Processing-MS", str(100))
+                self.send_header("OpenAI-Version", "2020-10-01")
+                self.send_header("X-RateLimit-Limit-Requests", "10000")
+                self.send_header("X-RateLimit-Limit-Tokens", "50000000")
+                self.send_header("X-RateLimit-Remaining-Requests", "9999")
+                self.send_header("X-RateLimit-Remaining-Tokens", "49999945")
+                self.send_header("X-RateLimit-Reset-Requests", "6ms")
+                self.send_header("X-RateLimit-Reset-Tokens", "0s")
+                self.send_header(
+                    "Strict-Transport-Security",
+                    "max-age=31536000; includeSubDomains; preload",
+                )
                 self.end_headers()
                 self.wfile.write(resp)
             except urllib.error.HTTPError as e:
