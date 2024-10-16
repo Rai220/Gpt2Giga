@@ -1,19 +1,17 @@
-import socketserver
-import http.server
-import urllib.request
-import urllib.error
 import argparse
-import os
-import logging
+import http.server
 import json
-import uuid
+import logging
+import os
+import socketserver
 import time
-
-from gigachat import GigaChat
-from gigachat.models import Chat, ChatCompletion
-
+import urllib.error
+import urllib.request
+import uuid
 
 from dotenv import find_dotenv, load_dotenv
+from gigachat import GigaChat
+from gigachat.models import Chat, ChatCompletion
 
 env_path = find_dotenv(".env")
 load_dotenv(env_path)
@@ -34,6 +32,7 @@ def send_to_gigachat(data: dict) -> ChatCompletion:
                 if tool["type"] == "function":
                     data["functions"].append(tool["function"])
         for message in data["messages"]:
+            message.pop("name", None)
             if message["role"] == "tool":
                 message["role"] = "function"
                 message["content"] = json.dumps(
@@ -59,22 +58,24 @@ def send_to_gigachat(data: dict) -> ChatCompletion:
         giga_dict = remove_none(giga_dict)
 
         for choise in giga_dict["choices"]:
+            choise["index"] = 0
+            choise["logprobs"] = None
+            choise["message"]["refusal"] = None
             if choise["message"]["role"] == "assistant":
+
                 if choise["message"].get("function_call", None):
                     arg_txt = json.dumps(
                         choise["message"]["function_call"]["arguments"],
-                        ensure_ascii=True,
+                        ensure_ascii=False,
                     )
-                    choise["message"]["tool_calls"] = [
-                        {
-                            "id": choise["message"]["functions_state_id"],
-                            "type": "function",
-                            "function": {
-                                "name": choise["message"]["function_call"]["name"],
-                                "arguments": arg_txt,
-                            },
-                        }
-                    ]
+                    choise["message"]["function_call"] = {
+                        "name": choise["message"]["function_call"]["name"],
+                        "arguments": arg_txt
+                    }
+                    if choise["message"].get("content", None) == "":
+                        choise["message"]["content"] = None
+                    choise["message"].pop("functions_state_id", None)
+                    choise["message"]["refusal"] = None
 
         result = {
             "id": "chatcmpl-" + str(uuid.uuid4()),
@@ -89,7 +90,7 @@ def send_to_gigachat(data: dict) -> ChatCompletion:
                 "prompt_tokens_details": {"cached_tokens": 0},
                 "completion_tokens_details": {"reasoning_tokens": 0},
             },
-            "system_fingerprint": None,
+            "system_fingerprint": f"fp_{uuid.uuid4()}",
         }
         return result
     except Exception as e:
@@ -120,24 +121,37 @@ class ProxyHandler(http.server.SimpleHTTPRequestHandler):
             request_body_text = request_body.decode("utf-8", errors="replace")
             json_body = json.loads(request_body_text)
             stream = json_body.pop("stream", False)
+            if stream:
+                self.send_error(501, "Stream is not supported yet")
+                return
 
             if self.server.verbose:
+                logging.info(f"Request Headers: {self.headers}")
                 logging.info(f"Request Body:")
                 logging.info(json_body)
 
             giga_resp = send_to_gigachat(json_body)
 
             try:
-                resp = json.dumps(giga_resp, ensure_ascii=False).encode("utf-8")
+                resp = json.dumps(giga_resp, ensure_ascii=False, indent=2).encode("utf-8")
+                resp = resp + b"\r\n"
 
                 if self.server.verbose:
                     print("\nResponse:")
-                    print(resp)
+                    print(json.dumps(giga_resp, ensure_ascii=False, indent=2))
 
                 self.send_response(200)
-                self.send_header("Content-Length", str(len(resp)))
+                
+                # self.send_header("Content-Type", "application/json")
+                self.send_header("content-type", "application/json")
+                self.send_header("content-length", str(len(resp)))
+                self.send_header("access-control-expose-headers", "X-Request-ID")
+                
+                # self.send_header("transfer-encoding", "chunked")
+                # self.send_header("connection", "keep-alive")
+                
                 self.send_header("X-Request-ID", str(uuid.uuid4()))
-                self.send_header("Access-Control-Expose-Headers", "X-Request-ID")
+                
                 self.send_header("OpenAI-Organization", "user-s99cjsitxzpppdim4tm9oe16")
                 self.send_header("OpenAI-Processing-MS", str(100))
                 self.send_header("OpenAI-Version", "2020-10-01")
