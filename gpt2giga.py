@@ -70,7 +70,7 @@ def send_to_gigachat(data: dict) -> ChatCompletion:
                     )
                     choise["message"]["function_call"] = {
                         "name": choise["message"]["function_call"]["name"],
-                        "arguments": arg_txt
+                        "arguments": arg_txt,
                     }
                     if choise["message"].get("content", None) == "":
                         choise["message"]["content"] = None
@@ -100,17 +100,23 @@ def send_to_gigachat(data: dict) -> ChatCompletion:
 
 class ProxyHandler(http.server.SimpleHTTPRequestHandler):
     def do_GET(self):
-        self.handle_proxy_request()
+        if self.path == "/models" or self.path == "/v1/models":
+            self.handle_models_request()
+        else:
+            self.handle_proxy_request()
 
     def do_POST(self):
         self.handle_proxy_request()
 
+    def _send_CROS_headers(self):
+        self.send_header("Access-Control-Allow-Origin", "*")
+        self.send_header("Access-Control-Allow-Headers", "Content-Type, Authorization")
+        self.send_header("Access-Control-Allow-Methods", "GET, POST, OPTIONS")
+
     def do_OPTIONS(self):
         self.send_response(200)
         self.send_header("Allow", "GET, POST, OPTIONS")
-        self.send_header("Access-Control-Allow-Origin", "*")
-        self.send_header("Access-Control-Allow-Methods", "GET, POST, OPTIONS")
-        self.send_header("Access-Control-Allow-Headers", "Content-Type, Authorization")
+        self._send_CROS_headers()
         self.end_headers()
 
     def handle_proxy_request(self):
@@ -123,7 +129,7 @@ class ProxyHandler(http.server.SimpleHTTPRequestHandler):
             json_body = json.loads(request_body_text)
             stream = json_body.pop("stream", False)
             use_gzip = "gzip" in accept_encoding
-            
+
             if self.server.verbose:
                 logging.info(f"Request Headers: {self.headers}")
                 logging.info(f"Request Body:")
@@ -132,7 +138,9 @@ class ProxyHandler(http.server.SimpleHTTPRequestHandler):
             giga_resp = send_to_gigachat(json_body)
 
             try:
-                resp = json.dumps(giga_resp, ensure_ascii=False, indent=2).encode("utf-8")
+                resp = json.dumps(giga_resp, ensure_ascii=False, indent=2).encode(
+                    "utf-8"
+                )
                 # resp = resp + b"\r\n"
 
                 if self.server.verbose:
@@ -140,44 +148,95 @@ class ProxyHandler(http.server.SimpleHTTPRequestHandler):
                     print(json.dumps(giga_resp, ensure_ascii=False, indent=2))
 
                 self.send_response(200)
-                
-                # if use_gzip:
-                #     out = io.BytesIO()
-                #     with gzip.GzipFile(fileobj=out, mode="w") as f:
-                #         f.write(resp)
-                #     resp = out.getvalue()
-                #     self.send_header("Content-Encoding", "gzip")
-                
-                self.send_header("Content-Type", "application/json")
-                self.send_header("Content-Length", str(len(resp)))
-                self.send_header("Connection", "keep-alive")
-                self.send_header("access-control-expose-headers", "X-Request-ID")
-                
-                # self.send_header("transfer-encoding", "chunked")
-                
-                self.send_header("openai-organization", "user-1234567890")
-                self.send_header("openai-processing-ms", str(100))
-                self.send_header("openai-version", "2020-10-01")
-                self.send_header("x-ratelimit-limit-requests", "10000")
-                self.send_header("x-ratelimit-limit-tokens", "50000000")
-                self.send_header("x-ratelimit-remaining-requests", "9999")
-                self.send_header("x-ratelimit-remaining-tokens", "49999945")
-                self.send_header("x-ratelimit-reset-requests", "6ms")
-                self.send_header("x-ratelimit-reset-token", "0s")
-                self.send_header("x-request-id", "req_" + str(uuid.uuid4()))
-                self.end_headers()
-                self.wfile.write(resp)
+
+                if stream:
+                    # Установить заголовки для стриминга
+                    self.send_header(
+                        "Content-Type", "ttext/event-stream; charset=utf-8"
+                    )
+                    self.send_header("Cache-Control", "no-cache")
+                    # self.send_header("Connection", "keep-alive")
+                    self.send_header("X-Accel-Buffering", "no")
+                    self._send_CROS_headers()
+                    self.end_headers()
+
+                    to_send = {
+                        "id": giga_resp["id"],
+                        "object": "chat.completion.chunk",
+                        "created": giga_resp["created"],
+                        "model": giga_resp["model"],
+                        "system_fingerprint": "fp_6b68a8204b",
+                        "choices": [
+                            {
+                                "index": 0,
+                                "delta": giga_resp["choices"][0]["message"],
+                                "logprobs": None,
+                                "finish_reason": None,
+                            }
+                        ],
+                    }
+
+                    self.wfile.write(
+                        (
+                            f"""data: {json.dumps(to_send, ensure_ascii=False)}\r\n\r\n"""
+                        ).encode("utf-8")
+                    )
+                    self.wfile.write("""data: [DONE]\r\n\r\n""".encode("utf-8"))
+                    self.wfile.write("""\r\n\r\n""".encode("utf-8"))
+                    return
+                else:
+                    self.send_header("Content-Type", "application/json")
+                    self.send_header("Content-Length", str(len(resp)))
+                    self.send_header("Connection", "keep-alive")
+                    self.send_header("access-control-expose-headers", "X-Request-ID")
+
+                    self._send_CROS_headers()
+
+                    self.send_header("openai-organization", "user-1234567890")
+                    self.send_header("openai-processing-ms", str(100))
+                    self.send_header("openai-version", "2020-10-01")
+                    self.send_header("x-ratelimit-limit-requests", "10000")
+                    self.send_header("x-ratelimit-limit-tokens", "50000000")
+                    self.send_header("x-ratelimit-remaining-requests", "9999")
+                    self.send_header("x-ratelimit-remaining-tokens", "49999945")
+                    self.send_header("x-ratelimit-reset-requests", "6ms")
+                    self.send_header("x-ratelimit-reset-token", "0s")
+                    self.send_header("x-request-id", "req_" + str(uuid.uuid4()))
+                    self.end_headers()
+                    self.wfile.write(resp)
             except urllib.error.HTTPError as e:
+                logging.error(f"Error processing the request: {e}", exc_info=True)
                 self.send_response(e.code)
                 self.send_header("Content-Type", "text/html")
                 self.end_headers()
                 self.wfile.write(e.read())
 
         except Exception as e:
+            logging.error(f"Error processing the request: {e}", exc_info=True)
             self.send_error(500, f"Error processing the request: {e}")
         finally:
             self.wfile.flush()
             self.connection.close()
+
+    def handle_models_request(self):
+        try:
+            with open("models.json", "r", encoding="utf-8") as f:
+                models_data = json.load(f)
+
+            response_data = json.dumps(models_data, ensure_ascii=False).encode("utf-8")
+
+            self.send_response(200)
+            self.send_header("Content-Type", "application/json")
+            self.send_header("Content-Length", str(len(response_data)))
+            self._send_CROS_headers()
+            self.end_headers()
+            self.wfile.write(response_data)
+
+        except FileNotFoundError:
+            self.send_error(404, "models.json not found")
+        except Exception as e:
+            logging.error(f"Error handling /v1/models request: {e}", exc_info=True)
+            self.send_error(500, "Internal Server Error")
 
 
 class ThreadingHTTPServer(socketserver.ThreadingMixIn, http.server.HTTPServer):
