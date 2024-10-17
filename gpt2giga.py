@@ -119,12 +119,11 @@ class ProxyHandler(http.server.SimpleHTTPRequestHandler):
             content_length = int(self.headers.get("Content-Length", 0))
             request_body = self.rfile.read(content_length) if content_length else None
             request_body_text = request_body.decode("utf-8", errors="replace")
+            accept_encoding = self.headers.get("accept-encoding", "")
             json_body = json.loads(request_body_text)
             stream = json_body.pop("stream", False)
-            if stream:
-                self.send_error(501, "Stream is not supported yet")
-                return
-
+            use_gzip = "gzip" in accept_encoding
+            
             if self.server.verbose:
                 logging.info(f"Request Headers: {self.headers}")
                 logging.info(f"Request Body:")
@@ -134,7 +133,7 @@ class ProxyHandler(http.server.SimpleHTTPRequestHandler):
 
             try:
                 resp = json.dumps(giga_resp, ensure_ascii=False, indent=2).encode("utf-8")
-                resp = resp + b"\r\n"
+                # resp = resp + b"\r\n"
 
                 if self.server.verbose:
                     print("\nResponse:")
@@ -142,29 +141,30 @@ class ProxyHandler(http.server.SimpleHTTPRequestHandler):
 
                 self.send_response(200)
                 
-                # self.send_header("Content-Type", "application/json")
-                self.send_header("content-type", "application/json")
-                self.send_header("content-length", str(len(resp)))
+                # if use_gzip:
+                #     out = io.BytesIO()
+                #     with gzip.GzipFile(fileobj=out, mode="w") as f:
+                #         f.write(resp)
+                #     resp = out.getvalue()
+                #     self.send_header("Content-Encoding", "gzip")
+                
+                self.send_header("Content-Type", "application/json")
+                self.send_header("Content-Length", str(len(resp)))
+                self.send_header("Connection", "keep-alive")
                 self.send_header("access-control-expose-headers", "X-Request-ID")
                 
                 # self.send_header("transfer-encoding", "chunked")
-                # self.send_header("connection", "keep-alive")
                 
-                self.send_header("X-Request-ID", str(uuid.uuid4()))
-                
-                self.send_header("OpenAI-Organization", "user-s99cjsitxzpppdim4tm9oe16")
-                self.send_header("OpenAI-Processing-MS", str(100))
-                self.send_header("OpenAI-Version", "2020-10-01")
-                self.send_header("X-RateLimit-Limit-Requests", "10000")
-                self.send_header("X-RateLimit-Limit-Tokens", "50000000")
-                self.send_header("X-RateLimit-Remaining-Requests", "9999")
-                self.send_header("X-RateLimit-Remaining-Tokens", "49999945")
-                self.send_header("X-RateLimit-Reset-Requests", "6ms")
-                self.send_header("X-RateLimit-Reset-Tokens", "0s")
-                self.send_header(
-                    "Strict-Transport-Security",
-                    "max-age=31536000; includeSubDomains; preload",
-                )
+                self.send_header("openai-organization", "user-1234567890")
+                self.send_header("openai-processing-ms", str(100))
+                self.send_header("openai-version", "2020-10-01")
+                self.send_header("x-ratelimit-limit-requests", "10000")
+                self.send_header("x-ratelimit-limit-tokens", "50000000")
+                self.send_header("x-ratelimit-remaining-requests", "9999")
+                self.send_header("x-ratelimit-remaining-tokens", "49999945")
+                self.send_header("x-ratelimit-reset-requests", "6ms")
+                self.send_header("x-ratelimit-reset-token", "0s")
+                self.send_header("x-request-id", "req_" + str(uuid.uuid4()))
                 self.end_headers()
                 self.wfile.write(resp)
             except urllib.error.HTTPError as e:
@@ -197,7 +197,7 @@ def run_proxy_server(host, port, verbose):
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(
-        description="Асинхронный HTTP-прокси с поддержкой стриминга."
+        description="Gpt2Giga converter proxy. Use GigaChat instead of OpenAI GPT models"
     )
     parser.add_argument(
         "--host",
