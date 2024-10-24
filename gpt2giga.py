@@ -23,7 +23,7 @@ def init_gigachat_client() -> GigaChat:
     """
     verify_ssl_certs = os.getenv("GIGACHAT_VERIFY_SSL_CERTS", "False") != "False"
     profanity_check = os.getenv("GIGACHAT_PROFANITY_CHECK", "False") != "False"
-    return GigaChat(verify_ssl_certs=verify_ssl_certs, profanity_check=profanity_check)
+    return GigaChat(verify_ssl_certs=verify_ssl_certs, profanity_check=profanity_check, timeout=600)
 
 giga = init_gigachat_client()
 
@@ -55,18 +55,22 @@ def transform_input_data(data: dict) -> Tuple[Chat, Optional[str]]:
         A tuple containing the Chat object and the GPT model name.
     """
     gpt_model = data.pop("model", None)
-    temperature = data.get("temperature", 1e-15)
+    temperature = data.pop("temperature", None)
     if temperature == 0:
-        temperature = 1e-15
-    data["temperature"] = temperature
+        data["top_p"] = 0
+    elif temperature and temperature > 0:
+        data["temperature"] = temperature
 
     if "functions" not in data and data.get("tools"):
         data["functions"] = [
             tool["function"] for tool in data.get("tools", []) if tool["type"] == "function"
         ]
 
-    for message in data["messages"]:
+    for i, message in enumerate(data["messages"]):
         message.pop("name", None)
+        # No non-first system messages available.
+        if message["role"] == "system" and i > 0:
+            message["role"] = "user"
         if message["role"] == "tool":
             message["role"] = "function"
             message["content"] = json.dumps(message.get("content", ""), ensure_ascii=False)
@@ -225,9 +229,9 @@ class ProxyHandler(http.server.SimpleHTTPRequestHandler):
                 self.wfile.write(b"data: [DONE]\r\n\r\n")
                 self.wfile.write(b"\r\n\r\n")
             else:
-                self.send_header("Content-Type", "application/json")
-                self.send_header("Content-Length", str(len(response_body)))
-                self.send_header("Connection", "keep-alive")
+                self.send_header('Content-Type', 'application/json')
+                self.send_header('Content-Length', str(len(response_body)))
+                self.send_header('Connection', 'keep-alive')
                 self.send_header("Access-Control-Expose-Headers", "X-Request-ID")
                 self.send_header("OpenAI-Organization", "user-1234567890")
                 self.send_header("OpenAI-Processing-Ms", "100")
@@ -310,7 +314,7 @@ def main():
         "--verbose",
         action="store_true",
         default=os.getenv("GPT2GIGA_VERBOSE", "False") != "False",
-        help="Enable verbose logging",
+        help="enable verbose logging"
     )
 
     args = parser.parse_args()
