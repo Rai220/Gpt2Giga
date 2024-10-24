@@ -23,7 +23,9 @@
 GIGACHAT_USER=
 GIGACHAT_PASSWORD=
 GIGACHAT_BASE_URL=
+GIGACHAT_MODEL=
 ```
+Остальные настройки подключения к GigaChat можно посмотреть в документации пакета GigaChat: https://github.com/ai-forever/gigachat 
 
 ## Использование
 
