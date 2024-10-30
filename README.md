@@ -31,11 +31,11 @@ GIGACHAT_MODEL=
 
 Запуск прокси-сервера:
 
-```python proxy.py --host <host> --port <port> --verbose <True/False>```
+```gpt2giga --host <host> --port <port> --verbose <True/False>```
 
 ### Пример запуска с настройками по умолчанию:
 
-```python proxy.py```
+```gpt2giga```
 
 После запуска сервер будет слушать указанный хост и порт и перенаправлять все запросы, адресованные ChatGPT, на GigaChat.
 
