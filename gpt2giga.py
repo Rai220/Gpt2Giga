@@ -220,7 +220,7 @@ class ProxyHandler(http.server.SimpleHTTPRequestHandler):
                             "index": 0,
                             "delta": giga_resp["choices"][0]["message"],
                             "logprobs": None,
-                            "finish_reason": None,
+                            "finish_reason": giga_resp["choices"][0]["finish_reason"],
                         }
                     ],
                 }
