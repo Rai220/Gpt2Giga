@@ -141,6 +141,16 @@ def send_to_gigachat(data: dict) -> dict:
         The processed response dictionary.
     """
     chat, gpt_model = transform_input_data(data)
+    
+    # Collapse consecutive user role messages into one
+    collapsed_messages = []
+    for message in chat.messages:
+        if collapsed_messages and message.role == "user" and collapsed_messages[-1].role == "user":
+            collapsed_messages[-1].content += "\n" + message.content
+        else:
+            collapsed_messages.append(message)
+    chat.messages = collapsed_messages
+    
     giga_resp = giga.chat(chat)
     result = process_gigachat_response(giga_resp, gpt_model)
     return result
@@ -191,7 +201,7 @@ class ProxyHandler(http.server.SimpleHTTPRequestHandler):
             if self.verbose:
                 logging.info(f"Request Headers: {self.headers}")
                 logging.info("Request Body:")
-                logging.info(json_body)
+                logging.info(json.dumps(json_body, ensure_ascii=False, indent=2))
 
             giga_resp = send_to_gigachat(json_body)
             response_body = json.dumps(giga_resp, ensure_ascii=False, indent=2).encode("utf-8")
